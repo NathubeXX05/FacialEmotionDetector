@@ -1,56 +1,50 @@
-const video = document.getElementById('video')
-const canvas = document.getElementById('canvas')
-const textStatus = document.getElementById('textStatus')
-const app = document.getElementById('app')
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const textStatus = document.getElementById('textStatus');
+const app = document.getElementById('app');
+const emoji = document.getElementById('emoji');
 
-//Start video
-startVideo = () => {
-	// Older browsers might not implement mediaDevices at all, so we set an empty object first
+// Start video
+const startVideo = () => {
 	if (navigator.mediaDevices === undefined) {
-		navigator.mediaDevices = {}
+		navigator.mediaDevices = {};
 	}
 
-	// Some browsers partially implement mediaDevices. We can't just assign an object
-	// with getUserMedia as it would overwrite existing properties.
-	// Here, we will just add the getUserMedia property if it's missing.
 	if (navigator.mediaDevices.getUserMedia === undefined) {
 		navigator.mediaDevices.getUserMedia = function (constraints) {
-			// First get ahold of the legacy getUserMedia, if present
-			var getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia
-
-			// Some browsers just don't implement it - return a rejected promise with an error
-			// to keep a consistent interface
+			var getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
 			if (!getUserMedia) {
-				return Promise.reject(new Error('getUserMedia is not implemented in this browser'))
+				return Promise.reject(new Error('getUserMedia is not implemented in this browser'));
 			}
-
-			// Otherwise, wrap the call to the old navigator.getUserMedia with a Promise
 			return new Promise(function (resolve, reject) {
-				getUserMedia.call(navigator, constraints, resolve, reject)
-			})
-		}
+				getUserMedia.call(navigator, constraints, resolve, reject);
+			});
+		};
 	}
 
 	navigator.mediaDevices
-		.getUserMedia({ video: true })
+		.getUserMedia({ video: { width: 1280, height: 720 } }) // Augmenter la résolution
 		.then(function (stream) {
-			// Older browsers may not have srcObject
 			if ('srcObject' in video) {
-				video.srcObject = stream
+				video.srcObject = stream;
 			} else {
-				// Avoid using this in new browsers, as it is going away.
-				video.src = window.URL.createObjectURL(stream)
+				video.src = window.URL.createObjectURL(stream);
 			}
 			video.onloadedmetadata = function (e) {
-				video.play()
-			}
+				video.play();
+			};
 		})
 		.catch(function (err) {
-			console.log(err.name + ': ' + err.message)
-		})
-}
+			console.log(err.name + ': ' + err.message);
+		});
+};
 
-Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('./models'), faceapi.nets.faceLandmark68Net.loadFromUri('./models'), faceapi.nets.faceRecognitionNet.loadFromUri('./models'), faceapi.nets.faceExpressionNet.loadFromUri('./models')]).then(startVideo)
+Promise.all([
+	faceapi.nets.mtcnn.loadFromUri('./models'), // Utiliser un modèle plus précis
+	faceapi.nets.faceLandmark68Net.loadFromUri('./models'),
+	faceapi.nets.faceRecognitionNet.loadFromUri('./models'),
+	faceapi.nets.faceExpressionNet.loadFromUri('./models')
+]).then(startVideo);
 
 let statusIcons = {
 	default: { emoji: '😐', color: '#02c19c' },
@@ -61,53 +55,50 @@ let statusIcons = {
 	fearful: { emoji: '😨', color: '#90931d' },
 	disgusted: { emoji: '🤢', color: '#1a8d1a' },
 	surprised: { emoji: '😲', color: '#1230ce' },
-}
+};
 
 video.addEventListener('play', () => {
-	//Get dimensions from the actual video source
-	const displaySize = { width: video.width, height: video.height }
+	const displaySize = { width: video.width, height: video.height };
+	faceapi.matchDimensions(canvas, displaySize);
 
-	//Match those dimensions
-	faceapi.matchDimensions(canvas, displaySize)
+	let previousStatus = 'default';
+	let expressionScores = { neutral: 0, happy: 0, sad: 0, angry: 0, fearful: 0, disgusted: 0, surprised: 0 };
 
 	setInterval(async () => {
-		const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions()
-		const resizedDetections = faceapi.resizeResults(detections, displaySize)
-		canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
-		faceapi.draw.drawDetections(canvas, resizedDetections)
-		faceapi.draw.drawFaceExpressions(canvas, resizedDetections)
+		const detections = await faceapi.detectAllFaces(video, new faceapi.MtcnnOptions()).withFaceExpressions();
+		const resizedDetections = faceapi.resizeResults(detections, displaySize);
+		canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+		faceapi.draw.drawDetections(canvas, resizedDetections);
+		faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
 
 		if (detections.length > 0) {
-			//For each face detection
 			detections.forEach((element) => {
-				let status = ''
-				let valueStatus = 0.0
+				let status = '';
+				let valueStatus = 0.0;
 				for (const [key, value] of Object.entries(element.expressions)) {
 					if (value > valueStatus) {
-						status = key
-						valueStatus = value
+						status = key;
+						valueStatus = value;
 					}
+					expressionScores[key] = value; // Mettre à jour les scores d'expression
 				}
-				//Once we have the highest scored expression (status)
-				emoji.innerHTML = statusIcons[status].emoji
 
-				//Set the right emoji
-				textStatus.innerHTML = status
-
-				//Change background color
-				app.style.backgroundColor = statusIcons[status].color
-			})
+				// Filtrer les détections de faible confiance
+				if (valueStatus > 0.7) { // Ajuster le seuil selon vos besoins
+					emoji.innerHTML = statusIcons[status].emoji;
+					textStatus.innerHTML = `Tu as l'air ${status}`;
+					app.style.backgroundColor = statusIcons[status].color;
+					previousStatus = status;
+				} else {
+					emoji.innerHTML = statusIcons[previousStatus].emoji;
+					textStatus.innerHTML = `Tu as l'air ${previousStatus}`;
+					app.style.backgroundColor = statusIcons[previousStatus].color;
+				}
+			});
 		} else {
-			//If not face was detected
-
-			//Set default emoji
-			emoji.innerHTML = statusIcons['default'].emoji
-
-			//Change text
-			textStatus.innerHTML = '...'
-
-			//Change background color to default
-			app.style.backgroundColor = statusIcons['default'].color
+			emoji.innerHTML = statusIcons['default'].emoji;
+			textStatus.innerHTML = '...';
+			app.style.backgroundColor = statusIcons['default'].color;
 		}
-	}, 100)
-})
+	}, 100);
+});
